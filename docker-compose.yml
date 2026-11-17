@@ -1,0 +1,23 @@
+services:
+  mover-mix:
+    build: .
+    container_name: mover-mix
+    restart: unless-stopped
+    user: "${UID_GID:-1000:1000}"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - NAVIDROME_DB=/nd/navidrome.db
+      - MFUZZ_DB=/mfuzz/musica_local.sqlite
+    volumes:
+      - ./data:/data
+      - ${MIX:?Pon en .env tu carpeta Mix (MIX)}:${MIX_PATH:-/mix}
+      - ${MUSICA:?Pon en .env tu biblioteca (MUSICA)}:/music:ro
+      - ${NAVIDROME_DATA:?Pon en .env la carpeta de datos de Navidrome (NAVIDROME_DATA)}:/nd:ro
+      - ${MFUZZ_DIR:-./data/sin-mfuzz}:/mfuzz:ro
+      # Opcional: posts de blog con vvmm (https://github.com/volteret4/vvmm)
+      # - /ruta/a/vvmm:/vvmm
+      # - /ruta/a/tu/blog/hugo:/blog
+    ports:
+      - "${PUERTO:-8786}:8000"
