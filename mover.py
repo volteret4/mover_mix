@@ -724,7 +724,53 @@ class Mover:
             for name, folders in PLAYLISTS_AGREGADAS.items():
                 self._write_aggregate(name, folders)
 
-    # --- Last.fm ---
+    # --- ListenBrainz ---
+
+    def listenbrainz(self, path, info, pin=False):
+        """Marca la canción como favorita o, con «pin», la fija en el perfil (lo que en Last.fm es la obsesión).
+
+        None si no hay LISTENBRAINZ_TOKEN."""
+        token = os.getenv("LISTENBRAINZ_TOKEN")
+        if not token:
+            return None
+        api, headers = "https://api.listenbrainz.org/1/", {"Authorization": f"Token {token}"}
+        try:
+            mbid = self._recording_mbid(path, info, api, headers)
+            if not mbid:
+                self.log(f"ListenBrainz: {info['song_name']} no está en MusicBrainz")
+                return False
+            if pin:
+                r = requests.post(api + "pin", json={"recording_mbid": mbid}, headers=headers, timeout=20)
+            else:
+                r = requests.post(api + "feedback/recording-feedback", json={"recording_mbid": mbid, "score": 1},
+                                  headers=headers, timeout=20)
+            if r.status_code != 200:
+                self.log(f"ListenBrainz: HTTP {r.status_code} {r.text[:200]}")
+            return r.status_code == 200
+        except Exception as e:
+            self.log(f"ListenBrainz: {e}")
+            return False
+
+    @staticmethod
+    def _recording_mbid(path, info, api, headers):
+        """MBID de la grabación: la etiqueta de Picard o, si no la lleva, la búsqueda de ListenBrainz."""
+        # En un disco con cue la etiqueta es la del fichero entero, no la de la pista
+        if not info.get('cue'):
+            try:
+                tags = mutagen.File(path, easy=True) or {}
+                mbid = (tags.get('musicbrainz_trackid') or [''])[0].strip()
+                if re.fullmatch(r'[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}', mbid, re.I):
+                    return mbid.lower()
+            except Exception:
+                pass
+        if not (info.get('artist') and info.get('title')):
+            return None
+        r = requests.get(api + "metadata/lookup/", headers=headers, timeout=20,
+                         params={"artist_name": info['artist'], "recording_name": info['title']})
+        r.raise_for_status()
+        return r.json().get('recording_mbid')
+
+    # --- Last.fm (opcional, API de pago) ---
 
     @staticmethod
     def _lastfm_sig(params, secret):
@@ -916,13 +962,21 @@ class Mover:
             new_file = self.copy_file(path, folder, cue=info.get('cue'))
             new_file = self.set_tags(new_file, comment, rename=True)
             msgs.append(f"Copiado a {self.folder_summary(folder)}")
+            loved = self.listenbrainz(new_file, info)
+            if loved is not None:
+                msgs.append("ListenBrainz: añadida a favoritas" if loved else "ListenBrainz: error al añadir a favoritas")
             loved = self.lastfm_love(info['artist'], info['title'])
             if loved is not None:
                 msgs.append("Last.fm: añadida a loved" if loved else "Last.fm: error al añadir a loved")
 
         if obsession:
-            msgs.append("Last.fm: marcada como obsesión" if self.lastfm_obsession(info['artist'], info['title'])
-                        else "Last.fm: error al marcar la obsesión")
+            pinned = self.listenbrainz(new_file or path, info, pin=True)
+            if pinned is not None:
+                msgs.append("ListenBrainz: fijada en el perfil" if pinned else "ListenBrainz: error al fijarla")
+            # Sin ListenBrainz se intenta siempre, para avisar de que falta configurarlo
+            if pinned is None or os.getenv("LASTFM_USERNAME"):
+                msgs.append("Last.fm: marcada como obsesión" if self.lastfm_obsession(info['artist'], info['title'])
+                            else "Last.fm: error al marcar la obsesión")
 
         self.update_playlists()
         if new_file:
